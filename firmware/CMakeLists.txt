@@ -91,19 +91,21 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
 set(CMAKE_C_FLAGS_DEBUG "-O0 -g3 -DDEBUG")
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3 -DDEBUG")
 
+# Linker script
+set(LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/mk64fx512.ld")
+
 # Linker flags
 set(CMAKE_EXE_LINKER_FLAGS
     "${CPU_FLAGS}"
+    "-T${LINKER_SCRIPT}"        # Linker script
     "-Wl,--gc-sections"         # Remove unused sections
     "-Wl,--print-memory-usage"  # Display memory usage
     "-specs=nano.specs"         # Use newlib-nano (smaller C library)
+    "-specs=nosys.specs"        # No syscalls
     "-lm"                       # Link math library
     "-lc"                       # Link C library
+    "-lnosys"                   # No system calls
 )
-
-# TODO: Add linker script when available
-# set(LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/mk64fx512.ld")
-# set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -T${LINKER_SCRIPT}")
 
 ###############################################################################
 # Preprocessor Definitions
@@ -147,18 +149,24 @@ include_directories(
 
 # Main application sources
 set(SOURCES
+    # Startup code
+    src/startup_mk64fx512.c
+
+    # Main application
     src/main.cpp
 
-    # TODO: Add HAL driver sources
-    # src/hal/adc_k64.cpp
-    # src/hal/can_k64.cpp
-    # src/hal/gpio_k64.cpp
-    # src/hal/pwm_k64.cpp
-    # src/hal/uart_k64.cpp
+    # HAL drivers
+    src/hal/clock_k64.c
+    src/hal/gpio_k64.c
+    src/hal/uart_k64.c
+
+    # TODO: Add more HAL drivers as implemented
+    # src/hal/adc_k64.c
+    # src/hal/can_k64.c
+    # src/hal/pwm_k64.c
 
     # TODO: Add board configuration
     # src/board/board_config.cpp
-    # src/board/board_pins.cpp
 
     # TODO: Add rusEFI controller sources
     # src/controllers/fuel_injection.cpp
