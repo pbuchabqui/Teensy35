@@ -155,15 +155,18 @@ set(SOURCES
     # Main application
     src/main.cpp
 
-    # HAL drivers
+    # HAL drivers (Phase 1)
     src/hal/clock_k64.c
     src/hal/gpio_k64.c
     src/hal/uart_k64.c
 
+    # HAL drivers (Phase 2)
+    src/hal/adc_k64.c
+    src/hal/pwm_k64.c
+
     # TODO: Add more HAL drivers as implemented
-    # src/hal/adc_k64.c
     # src/hal/can_k64.c
-    # src/hal/pwm_k64.c
+    # src/hal/pit_k64.c
 
     # TODO: Add board configuration
     # src/board/board_config.cpp
