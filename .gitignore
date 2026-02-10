@@ -1,0 +1,38 @@
+# Build artifacts
+build/
+*.o
+*.elf
+*.hex
+*.bin
+*.map
+*.lst
+*.d
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Teensy Loader
+*.TEENSY
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+
+# Logs
+*.log
