@@ -166,10 +166,10 @@ set(SOURCES
 
     # HAL drivers (Phase 3)
     src/hal/pit_k64.c
+    src/hal/input_capture_k64.c
 
     # TODO: Add more HAL drivers as implemented
     # src/hal/can_k64.c
-    # src/hal/input_capture_k64.c
 
     # TODO: Add board configuration
     # src/board/board_config.cpp
