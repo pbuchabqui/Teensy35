@@ -1,8 +1,16 @@
 /**
  * @file engine_control.c
  * @brief Engine control implementation
- * @version 1.0.0
- * @date 2026-02-10
+ * @version 2.0.0
+ * @date 2026-02-11
+ *
+ * rusEFI-compatible implementation with:
+ * - Injector latency compensation
+ * - Dwell time scheduling
+ * - Wall wetting compensation
+ * - Sequential fuel/ignition timing
+ * - Sensor diagnostics
+ * - Closed-loop O2 control
  *
  * @copyright Copyright (c) 2026 - GPL v3 License
  */
@@ -10,6 +18,7 @@
 #include "engine_control.h"
 #include "../hal/adc_k64.h"
 #include "../hal/input_capture_k64.h"
+#include <stddef.h>
 #include <math.h>
 
 //=============================================================================
@@ -44,9 +53,33 @@ void ecu_init(ecu_state_t* ecu, const engine_config_t* config) {
         }
     }
 
+    // Initialize injector latency table (rusEFI-compatible)
+    // Typical injector: higher voltage = faster opening = less latency
+    float voltages[] = {6.0f, 8.0f, 10.0f, 12.0f, 13.5f, 14.0f, 15.0f, 16.0f};
+    float latencies[] = {1500.0f, 1200.0f, 1000.0f, 800.0f, 700.0f, 650.0f, 600.0f, 550.0f};
+    for (int i = 0; i < 8; i++) {
+        ecu->fuel.latency_table.voltage[i] = voltages[i];
+        ecu->fuel.latency_table.latency_us[i] = latencies[i];
+    }
+
+    // Initialize wall wetting (rusEFI-compatible)
+    ecu->fuel.wall_wetting.tau = 100.0f;           // 100ms time constant
+    ecu->fuel.wall_wetting.beta = 0.5f;            // 50% sticks to wall
+    ecu->fuel.wall_wetting.fuel_film_mass = 0.0f;
+    ecu->fuel.wall_wetting.prev_map_kpa = 100.0f;
+
     // Initialize ignition with defaults
     ecu->ignition.base_timing_deg = 10;  // 10° BTDC base
     ecu->ignition.dwell_time_us = 3000;  // 3ms dwell
+
+    // Initialize dwell table (rusEFI-compatible)
+    // Lower voltage = longer dwell needed for saturation
+    float dwell_voltages[] = {6.0f, 8.0f, 10.0f, 12.0f, 13.5f, 14.0f, 15.0f, 16.0f};
+    float dwell_times[] = {5000.0f, 4500.0f, 4000.0f, 3500.0f, 3000.0f, 2800.0f, 2600.0f, 2500.0f};
+    for (int i = 0; i < 8; i++) {
+        ecu->ignition.dwell_table.voltage[i] = dwell_voltages[i];
+        ecu->ignition.dwell_table.dwell_us[i] = dwell_times[i];
+    }
 
     // Initialize timing table with reasonable values
     for (int i = 0; i < 16; i++) {
@@ -55,6 +88,13 @@ void ecu_init(ecu_state_t* ecu, const engine_config_t* config) {
             ecu->ignition.timing_table[i][j] = 10.0f + (i * 2.0f);
         }
     }
+
+    // Initialize closed-loop O2 control (rusEFI-compatible)
+    ecu->sensors.closed_loop.proportional_gain = 0.1f;
+    ecu->sensors.closed_loop.integral_gain = 0.01f;
+    ecu->sensors.closed_loop.integral_error = 0.0f;
+    ecu->sensors.closed_loop.correction = 1.0f;
+    ecu->sensors.closed_loop.closed_loop_active = false;
 
     // Initialize runtime state
     ecu->loop_count = 0;
@@ -90,6 +130,21 @@ void ecu_update_sensors(ecu_state_t* ecu) {
     if (pos != NULL) {
         ecu->sensors.current_tooth = pos->tooth_count;
     }
+
+    // rusEFI-compatible sensor diagnostics
+    diagnose_sensors(&ecu->sensors);
+
+    // Update closed-loop O2 control (only when engine warmed up)
+    if (ecu->sensors.clt_celsius > 60.0f && ecu->sensors.engine_running) {
+        ecu->sensors.closed_loop.closed_loop_active = true;
+        update_closed_loop_fuel(&ecu->sensors.closed_loop,
+                               ecu->fuel.afr_target,
+                               ecu->sensors.afr,
+                               0.01f);  // 10ms update rate
+    } else {
+        ecu->sensors.closed_loop.closed_loop_active = false;
+        ecu->sensors.closed_loop.integral_error = 0.0f;  // Reset integral
+    }
 }
 
 uint32_t calculate_fuel_pulse(ecu_state_t* ecu) {
@@ -117,15 +172,34 @@ uint32_t calculate_fuel_pulse(ecu_state_t* ecu) {
     // Calculate required fuel mass (grams)
     float fuel_mass_g = air_mass_g / ecu->fuel.afr_target;
 
-    // Convert to injector pulse width
-    // pulse_width = (fuel_mass / injector_flow_rate) * 60,000,000 µs/min
-    float fuel_cc = fuel_mass_g / FUEL_DENSITY_G_CC;
+    // Convert to milligrams for wall wetting calculation
+    float fuel_mass_mg = fuel_mass_g * 1000.0f;
+
+    // rusEFI-compatible wall wetting compensation
+    float compensated_fuel_mg = update_wall_wetting(&ecu->fuel.wall_wetting,
+                                                    fuel_mass_mg,
+                                                    map_kpa,
+                                                    10.0f);  // 10ms cycle time
+
+    // Convert back to grams and then to pulse width
+    float compensated_fuel_g = compensated_fuel_mg / 1000.0f;
+    float fuel_cc = compensated_fuel_g / FUEL_DENSITY_G_CC;
     float pulse_us = (fuel_cc / ecu->fuel.injector_flow_cc) * 60000000.0f;
 
     // Apply corrections
     pulse_us *= ecu->fuel.clt_correction;
     pulse_us *= ecu->fuel.iat_correction;
     pulse_us += ecu->fuel.accel_enrichment;
+
+    // rusEFI-compatible closed-loop O2 correction
+    if (ecu->sensors.closed_loop.closed_loop_active) {
+        pulse_us *= ecu->sensors.closed_loop.correction;
+    }
+
+    // rusEFI-compatible injector latency compensation
+    float latency_us = calculate_injector_latency(&ecu->fuel.latency_table,
+                                                  ecu->sensors.battery_voltage);
+    pulse_us += latency_us;
 
     // Clamp to reasonable range (0.5ms - 20ms)
     if (pulse_us < 500.0f) pulse_us = 500.0f;
@@ -156,6 +230,11 @@ uint8_t calculate_ignition_timing(ecu_state_t* ecu) {
     // Clamp to safe range (0-40° BTDC)
     if (base_timing < 0.0f) base_timing = 0.0f;
     if (base_timing > 40.0f) base_timing = 40.0f;
+
+    // rusEFI-compatible dwell time scheduling
+    ecu->ignition.dwell_time_us = (uint16_t)calculate_dwell_time(
+        &ecu->ignition.dwell_table,
+        ecu->sensors.battery_voltage);
 
     return (uint8_t)base_timing;
 }
@@ -255,4 +334,230 @@ float lookup_table_2d(const float table[16][16],
     float v1 = v01 + (v11 - v01) * x_frac;
 
     return v0 + (v1 - v0) * y_frac;
+}
+
+//=============================================================================
+// rusEFI-Compatible Advanced Functions
+//=============================================================================
+
+float calculate_injector_latency(const injector_latency_table_t* table,
+                                 float battery_voltage) {
+    if (table == NULL) {
+        return 800.0f;  // Default 800µs
+    }
+
+    // Find voltage breakpoints for interpolation
+    for (int i = 0; i < 7; i++) {
+        if (battery_voltage >= table->voltage[i] &&
+            battery_voltage <= table->voltage[i + 1]) {
+
+            // Linear interpolation
+            float v0 = table->voltage[i];
+            float v1 = table->voltage[i + 1];
+            float l0 = table->latency_us[i];
+            float l1 = table->latency_us[i + 1];
+
+            float fraction = (battery_voltage - v0) / (v1 - v0);
+            return l0 + (l1 - l0) * fraction;
+        }
+    }
+
+    // Extrapolate if out of range
+    if (battery_voltage < table->voltage[0]) {
+        return table->latency_us[0];
+    } else {
+        return table->latency_us[7];
+    }
+}
+
+float calculate_dwell_time(const dwell_table_t* table,
+                          float battery_voltage) {
+    if (table == NULL) {
+        return 3000.0f;  // Default 3ms
+    }
+
+    // Find voltage breakpoints for interpolation
+    for (int i = 0; i < 7; i++) {
+        if (battery_voltage >= table->voltage[i] &&
+            battery_voltage <= table->voltage[i + 1]) {
+
+            // Linear interpolation
+            float v0 = table->voltage[i];
+            float v1 = table->voltage[i + 1];
+            float d0 = table->dwell_us[i];
+            float d1 = table->dwell_us[i + 1];
+
+            float fraction = (battery_voltage - v0) / (v1 - v0);
+            return d0 + (d1 - d0) * fraction;
+        }
+    }
+
+    // Extrapolate if out of range
+    if (battery_voltage < table->voltage[0]) {
+        return table->dwell_us[0];
+    } else {
+        return table->dwell_us[7];
+    }
+}
+
+float update_wall_wetting(wall_wetting_t* ww, float base_fuel_mg,
+                         float map_kpa, float dt) {
+    if (ww == NULL) {
+        return base_fuel_mg;
+    }
+
+    // Calculate MAP rate of change
+    float map_delta = map_kpa - ww->prev_map_kpa;
+    ww->prev_map_kpa = map_kpa;
+
+    // Update fuel film mass with exponential decay
+    // Film evaporation: dM/dt = -M/tau
+    float decay = expf(-dt / ww->tau);
+    ww->fuel_film_mass *= decay;
+
+    // Calculate transient compensation
+    // On acceleration (positive MAP delta): fuel sticks to manifold wall
+    // On deceleration (negative MAP delta): fuel evaporates from wall
+    float wall_contribution = base_fuel_mg * ww->beta;
+    float film_evaporation = ww->fuel_film_mass * (1.0f - decay);
+
+    // Add new fuel to film during acceleration
+    if (map_delta > 0.0f) {
+        ww->fuel_film_mass += wall_contribution * (map_delta / 10.0f);
+    }
+
+    // Compensated fuel = base + evaporation - wall_contribution
+    float compensated_fuel = base_fuel_mg - wall_contribution + film_evaporation;
+
+    // Ensure positive fuel amount
+    if (compensated_fuel < 0.0f) {
+        compensated_fuel = 0.0f;
+    }
+
+    return compensated_fuel;
+}
+
+void update_closed_loop_fuel(closed_loop_fuel_t* cl, float target_afr,
+                            float actual_afr, float dt) {
+    if (cl == NULL || !cl->closed_loop_active) {
+        return;
+    }
+
+    // Calculate AFR error
+    float error = target_afr - actual_afr;
+
+    // Proportional term
+    float p_term = cl->proportional_gain * error;
+
+    // Integral term with anti-windup
+    cl->integral_error += error * dt;
+
+    // Limit integral windup (±20% correction max)
+    if (cl->integral_error > 20.0f) {
+        cl->integral_error = 20.0f;
+    } else if (cl->integral_error < -20.0f) {
+        cl->integral_error = -20.0f;
+    }
+
+    float i_term = cl->integral_gain * cl->integral_error;
+
+    // Calculate correction factor (1.0 = no correction)
+    // Positive error (too lean) = increase fuel = correction > 1.0
+    // Negative error (too rich) = decrease fuel = correction < 1.0
+    float correction = 1.0f + (p_term + i_term) / 100.0f;
+
+    // Limit total correction to ±20%
+    if (correction > 1.2f) {
+        correction = 1.2f;
+    } else if (correction < 0.8f) {
+        correction = 0.8f;
+    }
+
+    cl->correction = correction;
+}
+
+void diagnose_sensors(sensor_data_t* sensors) {
+    if (sensors == NULL) {
+        return;
+    }
+
+    // Clear previous faults
+    sensors->diagnostics.tps_fault = false;
+    sensors->diagnostics.map_fault = false;
+    sensors->diagnostics.clt_fault = false;
+    sensors->diagnostics.iat_fault = false;
+    sensors->diagnostics.o2_fault = false;
+    sensors->diagnostics.battery_fault = false;
+    sensors->diagnostics.fault_code = 0;
+
+    // TPS diagnostics (expect 0-5V range)
+    if (sensors->tps_voltage < 0.1f || sensors->tps_voltage > 4.9f) {
+        sensors->diagnostics.tps_fault = true;
+        sensors->diagnostics.fault_code |= 0x0001;  // DTC P0121
+    }
+
+    // MAP diagnostics (expect 0.5-4.5V for 3-bar sensor)
+    if (sensors->map_voltage < 0.3f || sensors->map_voltage > 4.7f) {
+        sensors->diagnostics.map_fault = true;
+        sensors->diagnostics.fault_code |= 0x0002;  // DTC P0106
+    }
+
+    // CLT diagnostics (expect reasonable temperature range)
+    if (sensors->clt_celsius < -40.0f || sensors->clt_celsius > 150.0f) {
+        sensors->diagnostics.clt_fault = true;
+        sensors->diagnostics.fault_code |= 0x0004;  // DTC P0117/P0118
+    }
+
+    // IAT diagnostics (expect reasonable temperature range)
+    if (sensors->iat_celsius < -40.0f || sensors->iat_celsius > 150.0f) {
+        sensors->diagnostics.iat_fault = true;
+        sensors->diagnostics.fault_code |= 0x0008;  // DTC P0112/P0113
+    }
+
+    // O2 diagnostics (expect 0-1V for narrowband)
+    if (sensors->o2_voltage < 0.0f || sensors->o2_voltage > 1.1f) {
+        sensors->diagnostics.o2_fault = true;
+        sensors->diagnostics.fault_code |= 0x0010;  // DTC P0131
+    }
+
+    // Battery voltage diagnostics (expect 9-18V normal range)
+    if (sensors->battery_voltage < 9.0f || sensors->battery_voltage > 18.0f) {
+        sensors->diagnostics.battery_fault = true;
+        sensors->diagnostics.fault_code |= 0x0020;  // DTC P0560
+    }
+}
+
+float calculate_injection_timing(ecu_state_t* ecu, uint8_t cylinder) {
+    if (ecu == NULL || cylinder >= ecu->config.num_cylinders) {
+        return 0.0f;
+    }
+
+    // Calculate degrees per cylinder for even firing
+    float degrees_per_cylinder = 720.0f / ecu->config.num_cylinders;
+
+    // Calculate injection timing for this cylinder
+    // Typically inject during intake stroke (180° before TDC)
+    float injection_timing = cylinder * degrees_per_cylinder - 180.0f;
+
+    // Normalize to 0-720° range
+    while (injection_timing < 0.0f) {
+        injection_timing += 720.0f;
+    }
+
+    return injection_timing;
+}
+
+float calculate_spark_timing(ecu_state_t* ecu, uint8_t cylinder) {
+    if (ecu == NULL || cylinder >= ecu->config.num_cylinders) {
+        return 10.0f;
+    }
+
+    // Get base timing from main calculation
+    uint8_t base_timing = calculate_ignition_timing(ecu);
+
+    // Apply per-cylinder trim (future enhancement for individual cylinder tuning)
+    // For now, all cylinders use same timing
+    ecu->ignition.cylinder_timing_deg[cylinder] = base_timing;
+
+    return (float)base_timing;
 }

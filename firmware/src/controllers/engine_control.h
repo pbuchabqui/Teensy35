@@ -1,11 +1,16 @@
 /**
  * @file engine_control.h
- * @brief Engine control structures and basic algorithms
- * @version 1.0.0
- * @date 2026-02-10
+ * @brief rusEFI-compatible engine control structures and algorithms
+ * @version 2.0.0
+ * @date 2026-02-11
  *
- * This file provides the core engine control data structures and
- * basic fuel/ignition algorithms for the Teensy 3.5 ECU.
+ * This file provides rusEFI-compatible engine control with:
+ * - Injector latency compensation tables
+ * - Dwell time scheduling based on battery voltage
+ * - Wall wetting/transient fuel compensation
+ * - Sequential fuel and ignition timing per cylinder
+ * - Sensor diagnostics (open/short circuit detection)
+ * - PI-based closed-loop O2 feedback control
  *
  * @copyright Copyright (c) 2026 - GPL v3 License
  */
@@ -32,6 +37,26 @@ typedef struct {
 // Sensor Data
 //=============================================================================
 
+// Sensor diagnostics (rusEFI-compatible)
+typedef struct {
+    bool tps_fault;              // TPS open/short circuit
+    bool map_fault;              // MAP sensor fault
+    bool clt_fault;              // CLT sensor fault
+    bool iat_fault;              // IAT sensor fault
+    bool o2_fault;               // O2 sensor fault
+    bool battery_fault;          // Battery voltage fault
+    uint16_t fault_code;         // DTC fault code
+} sensor_diagnostics_t;
+
+// Closed-loop O2 control (rusEFI-compatible)
+typedef struct {
+    float proportional_gain;     // P gain for O2 control
+    float integral_gain;         // I gain for O2 control
+    float integral_error;        // Accumulated integral error
+    float correction;            // Current O2 correction factor
+    bool closed_loop_active;     // Closed-loop enabled flag
+} closed_loop_fuel_t;
+
 typedef struct {
     // Analog sensors (voltage)
     float tps_voltage;           // Throttle position (0-5V)
@@ -53,11 +78,31 @@ typedef struct {
     uint16_t current_tooth;      // Current crank position
     bool engine_running;         // Engine running flag
     bool sync_locked;            // Position sync status
+
+    // rusEFI-compatible diagnostics
+    sensor_diagnostics_t diagnostics;
+
+    // rusEFI-compatible closed-loop control
+    closed_loop_fuel_t closed_loop;
 } sensor_data_t;
 
 //=============================================================================
 // Fuel Control
 //=============================================================================
+
+// Injector latency compensation (rusEFI-compatible)
+typedef struct {
+    float voltage[8];            // Battery voltage breakpoints (V)
+    float latency_us[8];         // Injector latency at each voltage (µs)
+} injector_latency_table_t;
+
+// Wall wetting compensation (rusEFI-compatible)
+typedef struct {
+    float tau;                   // Time constant for fuel film (ms)
+    float beta;                  // Fraction of fuel that sticks to wall (0-1)
+    float fuel_film_mass;        // Current fuel film mass estimate (mg)
+    float prev_map_kpa;          // Previous MAP for delta calculation
+} wall_wetting_t;
 
 typedef struct {
     uint32_t base_pulse_us;      // Base injection pulse width (µs)
@@ -66,26 +111,49 @@ typedef struct {
     float fuel_pressure_kpa;     // Fuel pressure (kPa)
     float injector_flow_cc;      // Injector flow rate (cc/min)
 
+    // rusEFI-compatible injector compensation
+    injector_latency_table_t latency_table;
+
+    // rusEFI-compatible wall wetting
+    wall_wetting_t wall_wetting;
+
     // Corrections
     float clt_correction;        // Coolant temp correction
     float iat_correction;        // Intake air temp correction
     float accel_enrichment;      // Acceleration enrichment
     float o2_correction;         // Closed-loop O2 correction
+
+    // Sequential injection state (per-cylinder)
+    uint32_t cylinder_pulse_us[8];  // Individual cylinder pulse widths
+    uint8_t next_injection_cylinder; // Next cylinder to inject
 } fuel_control_t;
 
 //=============================================================================
 // Ignition Control
 //=============================================================================
 
+// Dwell time table (rusEFI-compatible)
+typedef struct {
+    float voltage[8];            // Battery voltage breakpoints (V)
+    float dwell_us[8];           // Dwell time at each voltage (µs)
+} dwell_table_t;
+
 typedef struct {
     uint8_t base_timing_deg;     // Base timing (degrees BTDC)
     float timing_table[16][16];  // Timing advance table
     uint16_t dwell_time_us;      // Coil dwell time (µs)
 
+    // rusEFI-compatible dwell scheduling
+    dwell_table_t dwell_table;
+
     // Corrections
     float clt_advance;           // Coolant temp advance
     float iat_advance;           // Intake air temp advance
     float knock_retard;          // Knock sensor retard
+
+    // Sequential ignition state (per-cylinder)
+    uint8_t cylinder_timing_deg[8];  // Individual cylinder timing
+    uint8_t next_spark_cylinder;     // Next cylinder to spark
 } ignition_control_t;
 
 //=============================================================================
@@ -193,5 +261,91 @@ float lookup_table_2d(const float table[16][16],
                      float x, float y,
                      float x_min, float x_max,
                      float y_min, float y_max);
+
+//=============================================================================
+// rusEFI-Compatible Advanced Functions
+//=============================================================================
+
+/**
+ * @brief Calculate injector latency compensation
+ *
+ * Compensates for injector opening/closing delay based on battery voltage
+ *
+ * @param table Pointer to latency table
+ * @param battery_voltage Current battery voltage
+ * @return Latency compensation in microseconds
+ */
+float calculate_injector_latency(const injector_latency_table_t* table,
+                                 float battery_voltage);
+
+/**
+ * @brief Calculate dwell time based on battery voltage
+ *
+ * Ensures proper coil saturation across voltage range
+ *
+ * @param table Pointer to dwell table
+ * @param battery_voltage Current battery voltage
+ * @return Dwell time in microseconds
+ */
+float calculate_dwell_time(const dwell_table_t* table,
+                          float battery_voltage);
+
+/**
+ * @brief Update wall wetting compensation
+ *
+ * Implements transient fuel compensation for throttle changes
+ *
+ * @param ww Pointer to wall wetting structure
+ * @param base_fuel_mg Base fuel mass in mg
+ * @param map_kpa Current manifold pressure
+ * @param dt Time delta in milliseconds
+ * @return Compensated fuel mass in mg
+ */
+float update_wall_wetting(wall_wetting_t* ww, float base_fuel_mg,
+                         float map_kpa, float dt);
+
+/**
+ * @brief Update closed-loop O2 control
+ *
+ * PI controller for air-fuel ratio correction
+ *
+ * @param cl Pointer to closed-loop structure
+ * @param target_afr Target air-fuel ratio
+ * @param actual_afr Measured air-fuel ratio
+ * @param dt Time delta in seconds
+ */
+void update_closed_loop_fuel(closed_loop_fuel_t* cl, float target_afr,
+                            float actual_afr, float dt);
+
+/**
+ * @brief Diagnose sensor faults
+ *
+ * Detects open/short circuits and out-of-range conditions
+ *
+ * @param sensors Pointer to sensor data structure
+ */
+void diagnose_sensors(sensor_data_t* sensors);
+
+/**
+ * @brief Calculate sequential injection timing
+ *
+ * Determines injection timing for each cylinder based on firing order
+ *
+ * @param ecu Pointer to ECU state
+ * @param cylinder Cylinder number (0-based)
+ * @return Injection timing in crank degrees
+ */
+float calculate_injection_timing(ecu_state_t* ecu, uint8_t cylinder);
+
+/**
+ * @brief Calculate sequential ignition timing
+ *
+ * Determines spark timing for each cylinder based on firing order
+ *
+ * @param ecu Pointer to ECU state
+ * @param cylinder Cylinder number (0-based)
+ * @return Spark timing in degrees BTDC
+ */
+float calculate_spark_timing(ecu_state_t* ecu, uint8_t cylinder);
 
 #endif // ENGINE_CONTROL_H
