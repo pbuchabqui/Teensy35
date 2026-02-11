@@ -168,16 +168,11 @@ set(SOURCES
     src/hal/pit_k64.c
     src/hal/input_capture_k64.c
 
+    # Engine control (Phase 4)
+    src/controllers/engine_control.c
+
     # TODO: Add more HAL drivers as implemented
     # src/hal/can_k64.c
-
-    # TODO: Add board configuration
-    # src/board/board_config.cpp
-
-    # TODO: Add rusEFI controller sources
-    # src/controllers/fuel_injection.cpp
-    # src/controllers/ignition_timing.cpp
-    # src/controllers/idle_control.cpp
 )
 
 ###############################################################################
