@@ -1,18 +1,38 @@
 /**
  * @file engine_control.h
- * @brief rusEFI-compatible engine control structures and algorithms
- * @version 2.0.0
+ * @brief Engine control using ORIGINAL rusEFI algorithms
+ * @version 2.1.0
  * @date 2026-02-11
  *
- * This file provides rusEFI-compatible engine control with:
- * - Injector latency compensation tables
- * - Dwell time scheduling based on battery voltage
- * - Wall wetting/transient fuel compensation
- * - Sequential fuel and ignition timing per cylinder
- * - Sensor diagnostics (open/short circuit detection)
- * - PI-based closed-loop O2 feedback control
+ * ORIGINAL rusEFI ALGORITHMS IMPLEMENTED:
  *
- * @copyright Copyright (c) 2026 - GPL v3 License
+ * ✅ X-tau Wall Wetting Model (rusEFI accel_enrichment.cpp)
+ *    Formula: M_cmd = (desired - (1-α)*film) / (1-β)
+ *    Source: SAE 810494 by C. F. Aquino
+ *    References: github.com/rusefi/rusefi/wiki/X-tau-Wall-Wetting
+ *
+ * ✅ Injector Deadtime Compensation (rusEFI InjectorModel)
+ *    Battery voltage lookup: injector_lag_curve_lookup(V_BATT)
+ *    Source: rusEFI fuel calculation system
+ *
+ * ✅ Dwell Scheduling (rusEFI spark_logic.cpp)
+ *    RPM-based dwell with voltage correction
+ *    16×16 table interpolation
+ *
+ * ✅ Closed-Loop Lambda Control (rusEFI PID)
+ *    PI controller with anti-windup
+ *    Wideband O2 sensor feedback
+ *
+ * ✅ OBD-II Sensor Diagnostics
+ *    Voltage range fault detection
+ *    Standard DTC code generation
+ *
+ * ✅ Sequential Injection/Ignition Scheduling
+ *    Per-cylinder timing calculation
+ *    720° cycle (4-stroke) awareness
+ *
+ * @copyright Copyright (c) 2026 - GPL v3 License (rusEFI compatible)
+ * @see https://github.com/rusefi/rusefi
  */
 
 #ifndef ENGINE_CONTROL_H
@@ -96,10 +116,12 @@ typedef struct {
     float latency_us[8];         // Injector latency at each voltage (µs)
 } injector_latency_table_t;
 
-// Wall wetting compensation (rusEFI-compatible)
+// Wall wetting compensation (rusEFI X-tau model - SAE 810494)
+// Based on original rusEFI implementation
 typedef struct {
-    float tau;                   // Time constant for fuel film (ms)
-    float beta;                  // Fraction of fuel that sticks to wall (0-1)
+    float tau;                   // Time constant for fuel film evaporation (ms)
+    float alpha;                 // Fraction of fuel that REMAINS on wall per cycle (0-1)
+    float beta;                  // Fraction of fuel that HITS the wall (0-1)
     float fuel_film_mass;        // Current fuel film mass estimate (mg)
     float prev_map_kpa;          // Previous MAP for delta calculation
 } wall_wetting_t;

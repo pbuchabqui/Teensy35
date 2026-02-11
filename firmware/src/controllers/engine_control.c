@@ -1,18 +1,39 @@
 /**
  * @file engine_control.c
- * @brief Engine control implementation
- * @version 2.0.0
+ * @brief Engine control implementation using original rusEFI algorithms
+ * @version 2.1.0
  * @date 2026-02-11
  *
- * rusEFI-compatible implementation with:
- * - Injector latency compensation
- * - Dwell time scheduling
- * - Wall wetting compensation
- * - Sequential fuel/ignition timing
- * - Sensor diagnostics
- * - Closed-loop O2 control
+ * This implementation uses ORIGINAL rusEFI algorithms adapted for Teensy 3.5:
  *
- * @copyright Copyright (c) 2026 - GPL v3 License
+ * 1. X-tau Wall Wetting (SAE 810494 by C. F. Aquino)
+ *    - Source: github.com/rusefi/rusefi/controllers/algo/accel_enrichment.cpp
+ *    - Formula: M_cmd = (desired - (1-α)*film) / (1-β)
+ *    - References: rusEFI wiki X-tau Wall Wetting
+ *
+ * 2. Injector Latency Compensation
+ *    - Source: rusEFI injector_lag_curve_lookup(V_BATT)
+ *    - Battery voltage-based deadtime correction
+ *
+ * 3. Dwell Time Scheduling
+ *    - Source: rusEFI spark_logic.cpp
+ *    - RPM-based dwell curve with voltage compensation
+ *
+ * 4. Closed-Loop O2 Control
+ *    - PI controller with anti-windup
+ *    - Based on rusEFI lambda feedback system
+ *
+ * 5. Sensor Diagnostics
+ *    - OBD-II compatible fault detection
+ *    - Voltage range checking per rusEFI standards
+ *
+ * 6. Sequential Injection/Ignition
+ *    - Per-cylinder timing calculation
+ *    - 720° cycle awareness (4-stroke)
+ *
+ * @copyright Copyright (c) 2026 - GPL v3 License (compatible with rusEFI)
+ * @see https://github.com/rusefi/rusefi
+ * @see https://github.com/rusefi/rusefi/wiki/X-tau-Wall-Wetting
  */
 
 #include "engine_control.h"
@@ -62,9 +83,11 @@ void ecu_init(ecu_state_t* ecu, const engine_config_t* config) {
         ecu->fuel.latency_table.latency_us[i] = latencies[i];
     }
 
-    // Initialize wall wetting (rusEFI-compatible)
-    ecu->fuel.wall_wetting.tau = 100.0f;           // 100ms time constant
-    ecu->fuel.wall_wetting.beta = 0.5f;            // 50% sticks to wall
+    // Initialize wall wetting (rusEFI X-tau model - original algorithm)
+    // Based on SAE 810494 by C. F. Aquino
+    ecu->fuel.wall_wetting.tau = 100.0f;           // 100ms evaporation time constant
+    ecu->fuel.wall_wetting.alpha = 0.95f;          // 95% remains on wall per cycle
+    ecu->fuel.wall_wetting.beta = 0.5f;            // 50% hits the wall
     ecu->fuel.wall_wetting.fuel_film_mass = 0.0f;
     ecu->fuel.wall_wetting.prev_map_kpa = 100.0f;
 
@@ -406,35 +429,50 @@ float update_wall_wetting(wall_wetting_t* ww, float base_fuel_mg,
         return base_fuel_mg;
     }
 
-    // Calculate MAP rate of change
-    float map_delta = map_kpa - ww->prev_map_kpa;
+    // rusEFI X-tau wall wetting model (SAE 810494 by C. F. Aquino)
+    // Original rusEFI formula from accel_enrichment.cpp:
+    //
+    // M_cmd = (desiredMass - (1 - alpha) * fuelFilmMass) / (1 - beta)
+    // fuelFilmMass_next = alpha * fuelFilmMass + beta * M_cmd
+    //
+    // Where:
+    // - alpha: fraction of fuel that REMAINS on wall per cycle
+    // - beta: fraction of fuel that HITS the wall
+    // - M_cmd: commanded injector fuel mass (compensated)
+    // - desiredMass: target fuel mass for combustion
+
+    float alpha = ww->alpha;
+    float beta = ww->beta;
+    float fuel_film = ww->fuel_film_mass;
+
+    // Ignore tiny coefficients (rusEFI optimization)
+    if (alpha < 0.01f) alpha = 0.0f;
+    if (beta < 0.01f) beta = 0.0f;
+
+    // Calculate commanded fuel with wall compensation
+    // Formula accounts for: fuel evaporating from wall + fuel that will stick
+    float m_cmd;
+    if (beta < 0.99f) {
+        // Normal case: compensate for wall effects
+        m_cmd = (base_fuel_mg - (1.0f - alpha) * fuel_film) / (1.0f - beta);
+    } else {
+        // Edge case: all fuel hits wall (beta ≈ 1.0)
+        m_cmd = base_fuel_mg;
+    }
+
+    // Update fuel film mass for next cycle
+    // New film = fuel remaining from previous cycle + new fuel hitting wall
+    float fuel_film_next = alpha * fuel_film + beta * m_cmd;
+
+    // Store updated fuel film mass
+    ww->fuel_film_mass = fuel_film_next;
     ww->prev_map_kpa = map_kpa;
 
-    // Update fuel film mass with exponential decay
-    // Film evaporation: dM/dt = -M/tau
-    float decay = expf(-dt / ww->tau);
-    ww->fuel_film_mass *= decay;
+    // Clamp to positive values
+    if (m_cmd < 0.0f) m_cmd = 0.0f;
+    if (ww->fuel_film_mass < 0.0f) ww->fuel_film_mass = 0.0f;
 
-    // Calculate transient compensation
-    // On acceleration (positive MAP delta): fuel sticks to manifold wall
-    // On deceleration (negative MAP delta): fuel evaporates from wall
-    float wall_contribution = base_fuel_mg * ww->beta;
-    float film_evaporation = ww->fuel_film_mass * (1.0f - decay);
-
-    // Add new fuel to film during acceleration
-    if (map_delta > 0.0f) {
-        ww->fuel_film_mass += wall_contribution * (map_delta / 10.0f);
-    }
-
-    // Compensated fuel = base + evaporation - wall_contribution
-    float compensated_fuel = base_fuel_mg - wall_contribution + film_evaporation;
-
-    // Ensure positive fuel amount
-    if (compensated_fuel < 0.0f) {
-        compensated_fuel = 0.0f;
-    }
-
-    return compensated_fuel;
+    return m_cmd;
 }
 
 void update_closed_loop_fuel(closed_loop_fuel_t* cl, float target_afr,
