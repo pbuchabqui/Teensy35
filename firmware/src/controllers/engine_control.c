@@ -46,9 +46,9 @@
 // Constants
 //=============================================================================
 
-#define STOICH_AFR              14.7f   // Stoichiometric AFR for gasoline
+#define STOICH_AFR              13.1f   // Stoichiometric AFR for gasoline E30
 #define AIR_DENSITY_KG_M3       1.225f  // Air density at STP
-#define FUEL_DENSITY_G_CC       0.75f   // Gasoline density
+#define FUEL_DENSITY_G_CC       0.81f   // Gasoline E30 density
 
 //=============================================================================
 // Public Functions
