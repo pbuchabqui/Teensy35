@@ -171,8 +171,8 @@ set(SOURCES
     # Engine control (Phase 4)
     src/controllers/engine_control.c
 
-    # TODO: Add more HAL drivers as implemented
-    # src/hal/can_k64.c
+    # Communication (Final enhancements)
+    src/hal/can_k64.c
 )
 
 ###############################################################################
