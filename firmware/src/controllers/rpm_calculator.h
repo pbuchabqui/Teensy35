@@ -2,10 +2,11 @@
  * @file rpm_calculator.h
  * @brief rusEFI-compatible RPM Calculator for Teensy 3.5 (MK64FX512)
  *
- * Implements RPM calculation with exponential moving average filtering
- * based on rusEFI's rpm_calculator.cpp algorithm.
+ * Implements RPM calculation with exponential moving average filtering,
+ * acceleration compensation, and cranking mode support.
+ * Based on rusEFI's rpm_calculator.cpp algorithm.
  *
- * @version 2.3.0
+ * @version 2.4.0 (Phase 3: Advanced Features)
  * @date 2026-02-12
  *
  * Based on rusEFI:
@@ -31,8 +32,9 @@ extern "C" {
 /**
  * @brief RPM calculator structure (rusEFI-compatible)
  *
- * Calculates engine RPM with exponential moving average filtering
- * to smooth out transient variations. Compatible with rusEFI RpmCalculator.
+ * Calculates engine RPM with exponential moving average filtering,
+ * acceleration compensation, and cranking mode support.
+ * Compatible with rusEFI RpmCalculator (Phase 3).
  */
 typedef struct {
     // RPM values
@@ -55,6 +57,18 @@ typedef struct {
     // State flags
     bool stopped;                     ///< Engine stopped flag
     bool initialized;                 ///< Calculator initialized flag
+    bool cranking;                    ///< Cranking mode active (Phase 3)
+
+    // Acceleration tracking (Phase 3)
+    int32_t rpm_acceleration;         ///< RPM/s (positive = accelerating)
+    uint16_t prev_rpm;                ///< Previous RPM for acceleration calc
+    uint32_t prev_rpm_time;           ///< Time of previous RPM measurement
+    bool accelerating;                ///< Engine is accelerating
+    bool decelerating;                ///< Engine is decelerating
+
+    // Cranking mode parameters (Phase 3)
+    uint16_t cranking_rpm_threshold;  ///< RPM below which cranking mode is active
+    float cranking_filter_coeff;      ///< Faster filter during cranking (0.2 typical)
 
 } rpm_calculator_t;
 
@@ -196,6 +210,70 @@ uint32_t rpm_calculator_get_revolution_count(const rpm_calculator_t* calc);
  */
 void rpm_calculator_check_timeout(rpm_calculator_t* calc,
                                  uint32_t current_time);
+
+//=============================================================================
+// Phase 3: Advanced Features
+//=============================================================================
+
+/**
+ * @brief Get RPM acceleration (Phase 3)
+ *
+ * Returns rate of RPM change in RPM/second.
+ * Positive = accelerating, Negative = decelerating.
+ *
+ * @param calc Pointer to RPM calculator structure
+ * @return RPM acceleration (RPM/s)
+ */
+int32_t rpm_calculator_get_acceleration(const rpm_calculator_t* calc);
+
+/**
+ * @brief Check if engine is accelerating (Phase 3)
+ *
+ * @param calc Pointer to RPM calculator structure
+ * @return true if accelerating, false otherwise
+ */
+bool rpm_calculator_is_accelerating(const rpm_calculator_t* calc);
+
+/**
+ * @brief Check if engine is decelerating (Phase 3)
+ *
+ * @param calc Pointer to RPM calculator structure
+ * @return true if decelerating, false otherwise
+ */
+bool rpm_calculator_is_decelerating(const rpm_calculator_t* calc);
+
+/**
+ * @brief Check if engine is cranking (Phase 3)
+ *
+ * Cranking mode uses faster filtering for quicker sync during startup.
+ *
+ * @param calc Pointer to RPM calculator structure
+ * @return true if cranking (RPM below threshold), false otherwise
+ */
+bool rpm_calculator_is_cranking(const rpm_calculator_t* calc);
+
+/**
+ * @brief Set cranking RPM threshold (Phase 3)
+ *
+ * Default: 400 RPM
+ *
+ * @param calc Pointer to RPM calculator structure
+ * @param threshold_rpm RPM below which cranking mode is active
+ */
+void rpm_calculator_set_cranking_threshold(rpm_calculator_t* calc,
+                                          uint16_t threshold_rpm);
+
+/**
+ * @brief Set cranking filter coefficient (Phase 3)
+ *
+ * Faster filtering during cranking for quicker response.
+ * Default: 0.2 (20% new, 80% old) vs normal 0.05
+ *
+ * @param calc Pointer to RPM calculator structure
+ * @param coefficient Filter coefficient for cranking mode (0.0-1.0)
+ */
+void rpm_calculator_set_cranking_filter(rpm_calculator_t* calc,
+                                       float coefficient);
 
 #ifdef __cplusplus
 }
