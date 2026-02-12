@@ -1,14 +1,16 @@
 /**
  * @file input_capture_k64.c
  * @brief Input Capture driver implementation for Kinetis K64
- * @version 1.0.0
- * @date 2026-02-10
+ * @version 2.3.0
+ * @date 2026-02-12
  *
  * @copyright Copyright (c) 2026 - GPL v3 License
  */
 
 #include "input_capture_k64.h"
 #include "clock_k64.h"
+#include "trigger_decoder_k64.h"
+#include "rpm_calculator.h"
 
 //=============================================================================
 // Private Variables
@@ -24,6 +26,12 @@ static uint32_t last_capture[4][8] = {{0}};
 static engine_position_t engine_pos = {0};
 static uint16_t crank_teeth_per_rev = 36;
 static uint16_t crank_missing_teeth = 1;
+
+// rusEFI-compatible trigger decoder
+static trigger_decoder_t crank_decoder;
+
+// rusEFI-compatible RPM calculator
+static rpm_calculator_t rpm_calc;
 
 //=============================================================================
 // Private Helper Functions
@@ -192,29 +200,37 @@ void ic_clear_event(pwm_ftm_t ftm, pwm_channel_t channel) {
 
 /**
  * @brief Crank sensor interrupt callback
+ *
+ * Called on each crank tooth event. Uses rusEFI trigger decoder
+ * for missing tooth detection and synchronization, and rusEFI RPM
+ * calculator for filtered RPM with exponential moving average.
  */
 static void crank_sensor_callback(uint32_t timestamp) {
-    // Update engine position
+    // Process tooth through rusEFI trigger decoder
+    trigger_decoder_process_tooth(&crank_decoder, timestamp);
+
+    // Update engine position from decoder
+    engine_pos.sync_locked = trigger_decoder_is_synced(&crank_decoder);
     engine_pos.last_tooth_time = timestamp;
-    engine_pos.tooth_count++;
 
-    // Calculate period between teeth
-    uint32_t period_us = ic_get_period_us(PWM_FTM0, PWM_CHANNEL_4);
-    engine_pos.tooth_period = period_us;
+    if (engine_pos.sync_locked) {
+        // Get tooth index from decoder (synchronized position)
+        engine_pos.tooth_count = trigger_decoder_get_tooth_index(&crank_decoder);
 
-    // Calculate RPM
-    engine_pos.rpm = ic_calculate_rpm(period_us, crank_teeth_per_rev);
+        // Get tooth period from decoder
+        uint32_t period_us = trigger_decoder_get_tooth_period(&crank_decoder);
+        engine_pos.tooth_period = period_us;
 
-    // Reset tooth count after full revolution
-    if (engine_pos.tooth_count >= crank_teeth_per_rev) {
+        // Update RPM using rusEFI calculator (with exponential filtering)
+        rpm_calculator_on_tooth(&rpm_calc, period_us, crank_teeth_per_rev, timestamp);
+
+        // Get filtered RPM from calculator
+        engine_pos.rpm = rpm_calculator_get_rpm(&rpm_calc);
+    } else {
+        // Not synced - reset RPM calculator
+        rpm_calculator_reset(&rpm_calc);
+        engine_pos.rpm = 0;
         engine_pos.tooth_count = 0;
-    }
-
-    // Check for sync (detect missing teeth)
-    // TODO: Implement missing tooth detection for sync
-
-    if (engine_pos.rpm > 100 && engine_pos.rpm < 10000) {
-        engine_pos.sync_locked = true;
     }
 }
 
@@ -222,6 +238,26 @@ void crank_sensor_init(uint16_t teeth_per_rev, uint16_t missing_teeth,
                        sensor_type_t sensor_type) {
     crank_teeth_per_rev = teeth_per_rev;
     crank_missing_teeth = missing_teeth;
+
+    // Initialize rusEFI trigger decoder
+    trigger_decoder_init(&crank_decoder, teeth_per_rev, missing_teeth);
+
+    // Configure sync ratios for missing tooth detection
+    // For 36-1 wheel: gap is ~2.0× normal tooth spacing
+    // rusEFI defaults: 1.5 to 3.0 (good for most wheels)
+    trigger_decoder_set_sync_ratio(&crank_decoder, 1.5f, 3.0f);
+
+    // Set sync point (tooth 0 for 36-1 wheel - first tooth after gap)
+    trigger_decoder_set_sync_point(&crank_decoder, 0);
+
+    // Initialize rusEFI RPM calculator
+    rpm_calculator_init(&rpm_calc);
+
+    // Configure RPM filter (rusEFI default: 0.05 = 5% new, 95% old)
+    rpm_calculator_set_filter_coefficient(&rpm_calc, 0.05f);
+
+    // Set timeout to 1 second (engine considered stopped if no teeth)
+    rpm_calculator_set_timeout(&rpm_calc, 1000000);
 
     // Configure input capture for crank sensor
     // Typically on FTM0_CH4 (Pin 33 on Teensy 3.5)

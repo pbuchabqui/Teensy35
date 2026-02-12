@@ -67,6 +67,11 @@ void ecu_init(ecu_state_t* ecu, const engine_config_t* config) {
     ecu->fuel.fuel_pressure_kpa = 300.0f;  // 3 bar typical
     ecu->fuel.injector_flow_cc = 300.0f;   // 300cc/min injector
 
+    // Initialize injection mode (rusEFI-compatible)
+    // Default to SIMULTANEOUS for cranking reliability
+    // Can be changed to SEQUENTIAL/BATCH after engine starts
+    ecu->fuel.injection_mode = INJECTION_MODE_SIMULTANEOUS;
+
     // Initialize VE table with reasonable defaults (80% VE)
     for (int i = 0; i < 16; i++) {
         for (int j = 0; j < 16; j++) {
@@ -118,6 +123,9 @@ void ecu_init(ecu_state_t* ecu, const engine_config_t* config) {
     ecu->sensors.closed_loop.integral_error = 0.0f;
     ecu->sensors.closed_loop.correction = 1.0f;
     ecu->sensors.closed_loop.closed_loop_active = false;
+
+    // Initialize batch injection pairs
+    init_batch_injection_pairs(ecu);
 
     // Initialize runtime state
     ecu->loop_count = 0;
@@ -598,4 +606,176 @@ float calculate_spark_timing(ecu_state_t* ecu, uint8_t cylinder) {
     ecu->ignition.cylinder_timing_deg[cylinder] = base_timing;
 
     return (float)base_timing;
+}
+
+//=============================================================================
+// rusEFI Injection Mode Functions
+// Source: github.com/rusefi/rusefi/wiki/Fuel-Overview
+//=============================================================================
+
+void init_batch_injection_pairs(ecu_state_t* ecu) {
+    if (ecu == NULL) {
+        return;
+    }
+
+    // Calculate number of pairs (cylinders / 2)
+    ecu->fuel.num_batch_pairs = ecu->config.num_cylinders / 2;
+
+    // Set up cylinder pairs for batch injection
+    // Pairs are cylinders that are 360° apart in the cycle
+    // This ensures even distribution of fuel delivery
+
+    // For 4-cylinder engine (typical firing order 1-3-4-2):
+    // Pair 0: cylinders 0 and 2 (1 and 4) - 360° apart
+    // Pair 1: cylinders 1 and 3 (3 and 2) - 360° apart
+
+    for (uint8_t pair = 0; pair < ecu->fuel.num_batch_pairs; pair++) {
+        // First cylinder in pair
+        ecu->fuel.batch_pairs[pair][0] = pair;
+        // Second cylinder is 360° away (num_cylinders/2 positions later)
+        ecu->fuel.batch_pairs[pair][1] = pair + ecu->fuel.num_batch_pairs;
+    }
+}
+
+float calculate_injection_timing_for_mode(ecu_state_t* ecu,
+                                         float crank_angle,
+                                         uint8_t cylinder) {
+    if (ecu == NULL) {
+        return 0.0f;
+    }
+
+    switch (ecu->fuel.injection_mode) {
+        case INJECTION_MODE_SEQUENTIAL:
+            // Sequential: Each cylinder fires once per 720° cycle
+            // Fire 180° before TDC (during intake stroke)
+            return calculate_injection_timing(ecu, cylinder);
+
+        case INJECTION_MODE_BATCH: {
+            // Batch: Paired cylinders fire together twice per cycle
+            // Find which pair this cylinder belongs to
+            uint8_t pair_index = 0;
+            for (uint8_t p = 0; p < ecu->fuel.num_batch_pairs; p++) {
+                if (ecu->fuel.batch_pairs[p][0] == cylinder ||
+                    ecu->fuel.batch_pairs[p][1] == cylinder) {
+                    pair_index = p;
+                    break;
+                }
+            }
+
+            // Each pair fires at 0° and 360° (twice per cycle)
+            float degrees_per_pair = 360.0f / ecu->fuel.num_batch_pairs;
+            float pair_timing = pair_index * degrees_per_pair;
+
+            return pair_timing;
+        }
+
+        case INJECTION_MODE_SIMULTANEOUS:
+            // Simultaneous: All injectors fire together
+            // Can fire at any point, typically at crank sync
+            return 0.0f;
+
+        case INJECTION_MODE_SINGLE_POINT:
+            // Single point: One injector fires continuously
+            // Timing doesn't matter as much, fire at 0°
+            return 0.0f;
+
+        default:
+            return 0.0f;
+    }
+}
+
+uint8_t get_injectors_to_fire(ecu_state_t* ecu, float crank_angle) {
+    if (ecu == NULL) {
+        return 0;
+    }
+
+    uint8_t injector_mask = 0;
+    float tolerance = 5.0f;  // ±5° window for triggering
+
+    switch (ecu->fuel.injection_mode) {
+        case INJECTION_MODE_SEQUENTIAL: {
+            // Sequential: Check each cylinder's injection timing
+            for (uint8_t cyl = 0; cyl < ecu->config.num_cylinders; cyl++) {
+                float injection_angle = calculate_injection_timing(ecu, cyl);
+
+                // Check if current crank angle matches this cylinder's timing
+                float angle_diff = crank_angle - injection_angle;
+
+                // Handle wraparound (720° cycle)
+                if (angle_diff > 360.0f) angle_diff -= 720.0f;
+                if (angle_diff < -360.0f) angle_diff += 720.0f;
+
+                if (angle_diff >= 0.0f && angle_diff < tolerance) {
+                    injector_mask |= (1 << cyl);
+                }
+            }
+            break;
+        }
+
+        case INJECTION_MODE_BATCH: {
+            // Batch: Check each pair's timing
+            for (uint8_t pair = 0; pair < ecu->fuel.num_batch_pairs; pair++) {
+                float degrees_per_pair = 360.0f / ecu->fuel.num_batch_pairs;
+                float pair_timing_1 = pair * degrees_per_pair;
+                float pair_timing_2 = pair_timing_1 + 360.0f;
+
+                // Check first firing point (0-360°)
+                float diff1 = crank_angle - pair_timing_1;
+                if (diff1 >= 0.0f && diff1 < tolerance) {
+                    // Fire both cylinders in this pair
+                    injector_mask |= (1 << ecu->fuel.batch_pairs[pair][0]);
+                    injector_mask |= (1 << ecu->fuel.batch_pairs[pair][1]);
+                }
+
+                // Check second firing point (360-720°)
+                float diff2 = crank_angle - pair_timing_2;
+                if (diff2 >= 0.0f && diff2 < tolerance) {
+                    // Fire both cylinders in this pair again
+                    injector_mask |= (1 << ecu->fuel.batch_pairs[pair][0]);
+                    injector_mask |= (1 << ecu->fuel.batch_pairs[pair][1]);
+                }
+            }
+            break;
+        }
+
+        case INJECTION_MODE_SIMULTANEOUS:
+            // Simultaneous: Fire all injectors together at sync point
+            if (crank_angle < tolerance) {
+                // Fire all cylinders
+                for (uint8_t cyl = 0; cyl < ecu->config.num_cylinders; cyl++) {
+                    injector_mask |= (1 << cyl);
+                }
+            }
+            break;
+
+        case INJECTION_MODE_SINGLE_POINT:
+            // Single point: Fire injector 0 continuously
+            // In reality, this would be controlled by duty cycle
+            // For now, fire at start of cycle
+            if (crank_angle < tolerance) {
+                injector_mask = 0x01;  // Only injector 0
+            }
+            break;
+
+        default:
+            injector_mask = 0;
+            break;
+    }
+
+    return injector_mask;
+}
+
+const char* get_injection_mode_name(injection_mode_t mode) {
+    switch (mode) {
+        case INJECTION_MODE_SEQUENTIAL:
+            return "Sequential";
+        case INJECTION_MODE_BATCH:
+            return "Batch";
+        case INJECTION_MODE_SIMULTANEOUS:
+            return "Simultaneous";
+        case INJECTION_MODE_SINGLE_POINT:
+            return "Single Point";
+        default:
+            return "Unknown";
+    }
 }

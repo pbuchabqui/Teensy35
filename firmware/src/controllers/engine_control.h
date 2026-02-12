@@ -110,6 +110,15 @@ typedef struct {
 // Fuel Control
 //=============================================================================
 
+// Fuel injection modes (rusEFI-compatible)
+// Source: github.com/rusefi/rusefi/wiki/Fuel-Overview
+typedef enum {
+    INJECTION_MODE_SEQUENTIAL = 0,   // Each injector fires individually at correct time
+    INJECTION_MODE_BATCH = 1,        // Injectors fire in pairs, twice per cycle
+    INJECTION_MODE_SIMULTANEOUS = 2, // All injectors fire together
+    INJECTION_MODE_SINGLE_POINT = 3  // One injector for all cylinders
+} injection_mode_t;
+
 // Injector latency compensation (rusEFI-compatible)
 typedef struct {
     float voltage[8];            // Battery voltage breakpoints (V)
@@ -133,6 +142,9 @@ typedef struct {
     float fuel_pressure_kpa;     // Fuel pressure (kPa)
     float injector_flow_cc;      // Injector flow rate (cc/min)
 
+    // rusEFI-compatible injection mode
+    injection_mode_t injection_mode;  // Sequential/Batch/Simultaneous/Single
+
     // rusEFI-compatible injector compensation
     injector_latency_table_t latency_table;
 
@@ -145,9 +157,13 @@ typedef struct {
     float accel_enrichment;      // Acceleration enrichment
     float o2_correction;         // Closed-loop O2 correction
 
-    // Sequential injection state (per-cylinder)
+    // Sequential/Batch injection state (per-cylinder)
     uint32_t cylinder_pulse_us[8];  // Individual cylinder pulse widths
-    uint8_t next_injection_cylinder; // Next cylinder to inject
+    uint8_t next_injection_cylinder; // Next cylinder to inject (sequential/batch)
+
+    // Batch mode state
+    uint8_t batch_pairs[4][2];   // Cylinder pairs for batch injection
+    uint8_t num_batch_pairs;     // Number of pairs (num_cylinders / 2)
 } fuel_control_t;
 
 //=============================================================================
@@ -369,5 +385,63 @@ float calculate_injection_timing(ecu_state_t* ecu, uint8_t cylinder);
  * @return Spark timing in degrees BTDC
  */
 float calculate_spark_timing(ecu_state_t* ecu, uint8_t cylinder);
+
+//=============================================================================
+// rusEFI Injection Mode Functions
+// Source: github.com/rusefi/rusefi/wiki/Fuel-Overview
+//=============================================================================
+
+/**
+ * @brief Initialize batch injection pairs
+ *
+ * Sets up cylinder pairs for batch injection mode based on firing order.
+ * In batch mode, paired cylinders fire together twice per 720° cycle.
+ *
+ * Example 4-cylinder (1-3-4-2): Pairs are (1,4) and (3,2)
+ * These pairs are 360° apart in the cycle.
+ *
+ * @param ecu Pointer to ECU state
+ */
+void init_batch_injection_pairs(ecu_state_t* ecu);
+
+/**
+ * @brief Calculate injection timing for current mode
+ *
+ * Calculates injection timing based on selected injection mode:
+ * - SEQUENTIAL: Per-cylinder timing (180° before TDC)
+ * - BATCH: Pair timing (fires twice per cycle)
+ * - SIMULTANEOUS: All fire together (any time during cycle)
+ * - SINGLE_POINT: Single injector timing
+ *
+ * @param ecu Pointer to ECU state
+ * @param crank_angle Current crank angle (0-720°)
+ * @param cylinder Cylinder number for sequential/batch (0-based)
+ * @return Injection timing in crank degrees (0-720°)
+ */
+float calculate_injection_timing_for_mode(ecu_state_t* ecu,
+                                         float crank_angle,
+                                         uint8_t cylinder);
+
+/**
+ * @brief Determine which injectors should fire at current crank angle
+ *
+ * Based on injection mode and current crank position, determines which
+ * injector(s) need to fire. Returns a bitmask of injectors to activate.
+ *
+ * Bit positions correspond to cylinder numbers (bit 0 = cylinder 0, etc.)
+ *
+ * @param ecu Pointer to ECU state
+ * @param crank_angle Current crank angle (0-720°)
+ * @return Bitmask of injectors to fire (bit set = fire injector)
+ */
+uint8_t get_injectors_to_fire(ecu_state_t* ecu, float crank_angle);
+
+/**
+ * @brief Get injection mode name as string
+ *
+ * @param mode Injection mode enum
+ * @return Mode name string
+ */
+const char* get_injection_mode_name(injection_mode_t mode);
 
 #endif // ENGINE_CONTROL_H
