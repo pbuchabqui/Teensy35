@@ -5,12 +5,18 @@
  * Implements angle-based event scheduling for injection and ignition timing
  * based on rusEFI's event_queue.cpp algorithm.
  *
- * @version 2.3.0
+ * Now uses hardware timers for precise event execution (v2.3.1+).
+ *
+ * @version 2.3.1
  * @date 2026-02-12
  */
 
 #include "event_scheduler.h"
+#include "hardware_scheduler_k64.h"
 #include <string.h>
+
+// Global hardware scheduler instance
+static hw_scheduler_t hw_sched;
 
 // Minimum RPM for scheduling (prevents overflow)
 #define MIN_RPM_FOR_SCHEDULING   100
@@ -32,6 +38,9 @@ void scheduler_init(event_scheduler_t* sched)
     }
 
     sched->num_active_events = 0;
+
+    // Initialize hardware timer scheduler
+    hw_scheduler_init(&hw_sched);
 }
 
 /**
