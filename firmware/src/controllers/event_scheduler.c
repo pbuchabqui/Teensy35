@@ -22,6 +22,26 @@ static hw_scheduler_t hw_sched;
 #define MIN_RPM_FOR_SCHEDULING   100
 
 /**
+ * @brief Hardware event callback wrapper
+ *
+ * Called by hardware scheduler interrupt when event fires.
+ * Executes the actual event action.
+ */
+static void hw_event_callback(void* context)
+{
+    scheduled_event_t* event = (scheduled_event_t*)context;
+
+    if (event != NULL && event->action != NULL) {
+        // Fire the actual event action
+        event->action(event->cylinder);
+
+        // Mark event as no longer active
+        event->active = false;
+        event->hw_event_id = -1;
+    }
+}
+
+/**
  * @brief Initialize event scheduler
  */
 void scheduler_init(event_scheduler_t* sched)
@@ -109,7 +129,7 @@ uint32_t scheduler_angle_to_time(const event_scheduler_t* sched,
 }
 
 /**
- * @brief Schedule an event at a specific crank angle (rusEFI algorithm)
+ * @brief Schedule an event at a specific crank angle (rusEFI algorithm + hardware timers)
  */
 bool scheduler_add_event(event_scheduler_t* sched,
                         uint16_t angle,
@@ -127,7 +147,7 @@ bool scheduler_add_event(event_scheduler_t* sched,
     // Find free slot in event queue
     for (uint8_t i = 0; i < MAX_SCHEDULED_EVENTS; i++) {
         if (!sched->events[i].active) {
-            // Found free slot - schedule event
+            // Found free slot - setup event data
             sched->events[i].trigger_angle = angle;
             sched->events[i].cylinder = cylinder;
             sched->events[i].action = action;
@@ -142,13 +162,29 @@ bool scheduler_add_event(event_scheduler_t* sched,
 
             // Calculate absolute execution time (rusEFI angle-based scheduling)
             uint32_t time_until_event = angle_delta * sched->us_per_degree;
-            sched->events[i].scheduled_time_us = current_time_us + time_until_event;
+            uint32_t fire_time_us = current_time_us + time_until_event;
+            sched->events[i].scheduled_time_us = fire_time_us;
 
-            // Update statistics
-            sched->num_active_events++;
-            sched->events_scheduled++;
+            // NEW (v2.3.1): Schedule via hardware timer (automatic interrupt)
+            int8_t hw_id = hw_scheduler_schedule(&hw_sched,
+                                                fire_time_us,
+                                                hw_event_callback,
+                                                &sched->events[i]);
 
-            return true;
+            if (hw_id >= 0) {
+                // Successfully scheduled in hardware
+                sched->events[i].hw_event_id = hw_id;
+
+                // Update statistics
+                sched->num_active_events++;
+                sched->events_scheduled++;
+
+                return true;
+            } else {
+                // Hardware scheduler full - cleanup
+                sched->events[i].active = false;
+                return false;
+            }
         }
     }
 
@@ -157,39 +193,25 @@ bool scheduler_add_event(event_scheduler_t* sched,
 }
 
 /**
- * @brief Process scheduled events (rusEFI algorithm)
+ * @brief Process scheduled events (DEPRECATED in v2.3.1+)
  *
- * Checks all active events and fires those that have reached their
- * scheduled execution time.
+ * NOTE: This function is now OPTIONAL with hardware timer scheduling.
+ * Events fire automatically via hardware interrupts - no polling needed!
+ *
+ * This function is kept for backwards compatibility and diagnostics only.
+ * It won't find any events to fire since they're handled by hardware.
  */
 void scheduler_process_events(event_scheduler_t* sched,
                               uint32_t current_time_us)
 {
-    if (sched == NULL) {
-        return;
-    }
+    // NOTE (v2.3.1+): Events now fire automatically via hardware interrupts!
+    // This function does nothing - kept for API compatibility only.
 
-    // Check each active event
-    for (uint8_t i = 0; i < MAX_SCHEDULED_EVENTS; i++) {
-        if (sched->events[i].active) {
-            // Check if event should fire (time has arrived)
-            if (current_time_us >= sched->events[i].scheduled_time_us) {
-                // Fire event! (rusEFI execution)
-                sched->events[i].action(sched->events[i].cylinder);
+    // If you see this being called, you can remove it from your main loop.
+    // Events will still fire precisely via FTM interrupts.
 
-                // Mark as complete
-                sched->events[i].active = false;
-                sched->num_active_events--;
-                sched->events_fired++;
-
-                // Check if event fired late (missed timing)
-                uint32_t lateness_us = current_time_us - sched->events[i].scheduled_time_us;
-                if (lateness_us > 1000) {  // More than 1ms late
-                    sched->events_missed++;
-                }
-            }
-        }
-    }
+    (void)sched;  // Unused
+    (void)current_time_us;  // Unused
 }
 
 /**
@@ -201,9 +223,14 @@ void scheduler_clear_events(event_scheduler_t* sched)
         return;
     }
 
-    // Clear all events
+    // Clear all events and cancel hardware timers
     for (uint8_t i = 0; i < MAX_SCHEDULED_EVENTS; i++) {
+        if (sched->events[i].active && sched->events[i].hw_event_id >= 0) {
+            // Cancel hardware timer
+            hw_scheduler_cancel(&hw_sched, sched->events[i].hw_event_id);
+        }
         sched->events[i].active = false;
+        sched->events[i].hw_event_id = -1;
     }
 
     sched->num_active_events = 0;
@@ -222,7 +249,13 @@ void scheduler_remove_cylinder_events(event_scheduler_t* sched,
     // Find and remove events for this cylinder
     for (uint8_t i = 0; i < MAX_SCHEDULED_EVENTS; i++) {
         if (sched->events[i].active && sched->events[i].cylinder == cylinder) {
+            // Cancel hardware timer if scheduled
+            if (sched->events[i].hw_event_id >= 0) {
+                hw_scheduler_cancel(&hw_sched, sched->events[i].hw_event_id);
+            }
+
             sched->events[i].active = false;
+            sched->events[i].hw_event_id = -1;
             sched->num_active_events--;
         }
     }

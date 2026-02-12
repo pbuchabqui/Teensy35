@@ -55,6 +55,7 @@ typedef struct {
     bool active;                      ///< Event is currently scheduled
     uint32_t scheduled_time_us;       ///< Calculated execution time (µs)
     uint32_t angle_delta;             ///< Angle delta from current position
+    int8_t hw_event_id;               ///< Hardware scheduler event ID (v2.3.1+)
 } scheduled_event_t;
 
 /**
