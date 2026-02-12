@@ -10,6 +10,7 @@
 #include "input_capture_k64.h"
 #include "clock_k64.h"
 #include "trigger_decoder_k64.h"
+#include "rpm_calculator.h"
 
 //=============================================================================
 // Private Variables
@@ -28,6 +29,9 @@ static uint16_t crank_missing_teeth = 1;
 
 // rusEFI-compatible trigger decoder
 static trigger_decoder_t crank_decoder;
+
+// rusEFI-compatible RPM calculator
+static rpm_calculator_t rpm_calc;
 
 //=============================================================================
 // Private Helper Functions
@@ -198,7 +202,8 @@ void ic_clear_event(pwm_ftm_t ftm, pwm_channel_t channel) {
  * @brief Crank sensor interrupt callback
  *
  * Called on each crank tooth event. Uses rusEFI trigger decoder
- * for missing tooth detection and synchronization.
+ * for missing tooth detection and synchronization, and rusEFI RPM
+ * calculator for filtered RPM with exponential moving average.
  */
 static void crank_sensor_callback(uint32_t timestamp) {
     // Process tooth through rusEFI trigger decoder
@@ -216,10 +221,14 @@ static void crank_sensor_callback(uint32_t timestamp) {
         uint32_t period_us = trigger_decoder_get_tooth_period(&crank_decoder);
         engine_pos.tooth_period = period_us;
 
-        // Calculate RPM using rusEFI-measured period
-        engine_pos.rpm = ic_calculate_rpm(period_us, crank_teeth_per_rev);
+        // Update RPM using rusEFI calculator (with exponential filtering)
+        rpm_calculator_on_tooth(&rpm_calc, period_us, crank_teeth_per_rev, timestamp);
+
+        // Get filtered RPM from calculator
+        engine_pos.rpm = rpm_calculator_get_rpm(&rpm_calc);
     } else {
-        // Not synced - zero out RPM
+        // Not synced - reset RPM calculator
+        rpm_calculator_reset(&rpm_calc);
         engine_pos.rpm = 0;
         engine_pos.tooth_count = 0;
     }
@@ -240,6 +249,15 @@ void crank_sensor_init(uint16_t teeth_per_rev, uint16_t missing_teeth,
 
     // Set sync point (tooth 0 for 36-1 wheel - first tooth after gap)
     trigger_decoder_set_sync_point(&crank_decoder, 0);
+
+    // Initialize rusEFI RPM calculator
+    rpm_calculator_init(&rpm_calc);
+
+    // Configure RPM filter (rusEFI default: 0.05 = 5% new, 95% old)
+    rpm_calculator_set_filter_coefficient(&rpm_calc, 0.05f);
+
+    // Set timeout to 1 second (engine considered stopped if no teeth)
+    rpm_calculator_set_timeout(&rpm_calc, 1000000);
 
     // Configure input capture for crank sensor
     // Typically on FTM0_CH4 (Pin 33 on Teensy 3.5)
