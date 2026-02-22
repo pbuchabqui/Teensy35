@@ -1,0 +1,85 @@
+# Simple Makefile for Teensy 3.5 rusEFI firmware
+# For testing compilation only
+
+CC = arm-none-eabi-gcc
+CXX = arm-none-eabi-g++
+OBJCOPY = arm-none-eabi-objcopy
+SIZE = arm-none-eabi-size
+
+# CPU flags
+CPU_FLAGS = -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16
+
+# Common flags
+COMMON_FLAGS = $(CPU_FLAGS) -Wall -Wextra -ffunction-sections -fdata-sections -fno-common -fno-builtin
+
+# C flags
+C_FLAGS = $(COMMON_FLAGS) -std=gnu11 -O2 -DNDEBUG
+
+# C++ flags  
+CXX_FLAGS = $(COMMON_FLAGS) -std=gnu++11 -fno-exceptions -fno-rtti -fno-threadsafe-statics -O2 -DNDEBUG
+
+# Linker flags
+LD_FLAGS = $(CPU_FLAGS) -Tmk64fx512.ld -Wl,--gc-sections -Wl,--print-memory-usage -specs=nano.specs -specs=nosys.specs -lm -lc -lnosys -nodefaultlibs
+
+# Defines
+DEFINES = -D__MK64FX512__ -DTEENSY35 -DF_CPU=120000000 -DF_BUS=60000000 -DARDUINO=10813 -DUSB_SERIAL
+
+# Includes
+INCLUDES = -Iinclude -Isrc -Isrc/hal -Isrc/board -Isrc/controllers -Isrc/fatfs
+
+# Sources
+SOURCES = src/startup_mk64fx512.c \
+          src/main.cpp \
+          src/hal/clock_k64.c \
+          src/hal/gpio_k64.c \
+          src/hal/uart_k64.c \
+          src/hal/spi_k64.c \
+          src/hal/adc_k64.c \
+          src/hal/pwm_k64.c \
+          src/hal/pit_k64.c \
+          src/fatfs/fatfs_k64_simple.c \
+          src/communication/tunerstudio/tunerstudio.c \
+          src/config/config.c \
+          src/controllers/engine_control.c \
+          src/controllers/wideband_k64_simple.c
+
+# Objects
+OBJECTS = $(SOURCES:.c=.o)
+OBJECTS := $(OBJECTS:.cpp=.o)
+
+# Target
+TARGET = russefi_teensy35
+
+.PHONY: all clean
+
+all: $(TARGET).elf $(TARGET).hex $(TARGET).bin
+
+$(TARGET).elf: $(OBJECTS)
+	@echo "Linking $@"
+	$(CXX) $(LD_FLAGS) $(OBJECTS) -o $@
+	$(SIZE) $@
+
+$(TARGET).hex: $(TARGET).elf
+	@echo "Creating $@"
+	$(OBJCOPY) -O ihex $< $@
+
+$(TARGET).bin: $(TARGET).elf
+	@echo "Creating $@"
+	$(OBJCOPY) -O binary $< $@
+
+%.o: %.c
+	@echo "Compiling $<"
+	$(CC) $(C_FLAGS) $(DEFINES) $(INCLUDES) -c $< -o $@
+
+%.o: %.cpp
+	@echo "Compiling $<"
+	$(CXX) $(CXX_FLAGS) $(DEFINES) $(INCLUDES) -c $< -o $@
+
+clean:
+	rm -f $(OBJECTS) $(TARGET).elf $(TARGET).hex $(TARGET).bin
+
+test-compile:
+	@echo "Testing compilation of single file..."
+	$(CC) $(C_FLAGS) $(DEFINES) $(INCLUDES) -c src/startup_mk64fx512.c -o test.o
+	@echo "Compilation successful!"
+	rm -f test.o

@@ -31,6 +31,7 @@ typedef enum {
     CAN_BAUD_125K  = 125000,
     CAN_BAUD_250K  = 250000,
     CAN_BAUD_500K  = 500000,
+    CAN_BAUD_666K  = 666000,  // rusEFI 2025 update
     CAN_BAUD_1M    = 1000000,
 } can_baud_t;
 

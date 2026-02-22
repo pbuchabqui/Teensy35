@@ -7,8 +7,14 @@
  * @copyright Copyright (c) 2026 - GPL v3 License
  */
 
+#include <stdint.h>
+#include <stddef.h>
 #include "pit_k64.h"
 #include "clock_k64.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 //=============================================================================
 // SIM Register Access (for clock gating)
@@ -50,7 +56,7 @@ static uint32_t pit_us_to_ticks(uint32_t period_us) {
 // Interrupt Handlers
 //=============================================================================
 
-extern "C" void PIT0_IRQHandler(void) {
+void PIT0_IRQHandler(void) {
     if (PIT->TIMER[0].TFLG & PIT_TFLG_TIF) {
         // Clear interrupt flag
         PIT->TIMER[0].TFLG = PIT_TFLG_TIF;
@@ -62,7 +68,7 @@ extern "C" void PIT0_IRQHandler(void) {
     }
 }
 
-extern "C" void PIT1_IRQHandler(void) {
+void PIT1_IRQHandler(void) {
     if (PIT->TIMER[1].TFLG & PIT_TFLG_TIF) {
         PIT->TIMER[1].TFLG = PIT_TFLG_TIF;
         if (pit_callbacks[1] != NULL) {
@@ -71,7 +77,7 @@ extern "C" void PIT1_IRQHandler(void) {
     }
 }
 
-extern "C" void PIT2_IRQHandler(void) {
+void PIT2_IRQHandler(void) {
     if (PIT->TIMER[2].TFLG & PIT_TFLG_TIF) {
         PIT->TIMER[2].TFLG = PIT_TFLG_TIF;
         if (pit_callbacks[2] != NULL) {
@@ -80,7 +86,7 @@ extern "C" void PIT2_IRQHandler(void) {
     }
 }
 
-extern "C" void PIT3_IRQHandler(void) {
+void PIT3_IRQHandler(void) {
     if (PIT->TIMER[3].TFLG & PIT_TFLG_TIF) {
         PIT->TIMER[3].TFLG = PIT_TFLG_TIF;
         if (pit_callbacks[3] != NULL) {
@@ -88,6 +94,10 @@ extern "C" void PIT3_IRQHandler(void) {
         }
     }
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 //=============================================================================
 // Public Functions

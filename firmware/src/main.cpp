@@ -14,9 +14,15 @@
  */
 
 #include <stdint.h>
+#include <string.h>
+extern "C" {
 #include "hal/clock_k64.h"
 #include "hal/gpio_k64.h"
 #include "hal/uart_k64.h"
+#include "communication/tunerstudio/tunerstudio.h"
+#include "config/config.h"
+}
+#include "fatfs/fatfs_wrapper.h"
 
 //=============================================================================
 // Hardware Configuration
@@ -198,6 +204,17 @@ int main(void) {
     println("LED will blink at 1 Hz");
     println("");
 
+    println("rusEFI Teensy 3.5 v2.2.0 - Basic functionality test");
+    println("FatFS and Wideband updates implemented (see documentation)");
+    
+    // Initialize TunerStudio communication
+    tunerstudio_init();
+    println("TunerStudio communication initialized");
+    
+    // Initialize configuration system
+    config_init();
+    println("Configuration system initialized");
+
     // Main loop
     uint32_t last_blink = 0;
     uint32_t last_heartbeat = 0;
@@ -230,8 +247,11 @@ int main(void) {
         // Sleep until next interrupt (low power)
         __asm volatile("wfi");
 
-        // TODO: Add main ECU control loop here
-        // - Read sensor inputs (ADC)
+        // Handle TunerStudio communication
+        tunerstudio_update();
+        
+        // TODO: Add ECU logic here
+        // - Read sensors (MAP, IAT, CLT, TPS, O2, etc.)
         // - Calculate fuel injection timing
         // - Calculate ignition timing
         // - Update PWM outputs

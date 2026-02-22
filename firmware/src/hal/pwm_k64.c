@@ -7,6 +7,8 @@
  * @copyright Copyright (c) 2026 - GPL v3 License
  */
 
+#include <stdint.h>
+#include <stddef.h>
 #include "pwm_k64.h"
 #include "clock_k64.h"
 

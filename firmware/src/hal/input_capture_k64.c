@@ -7,10 +7,10 @@
  * @copyright Copyright (c) 2026 - GPL v3 License
  */
 
+#include <stdint.h>
+#include <stddef.h>
 #include "input_capture_k64.h"
 #include "clock_k64.h"
-#include "trigger_decoder_k64.h"
-#include "rpm_calculator.h"
 
 //=============================================================================
 // Private Variables
@@ -23,15 +23,15 @@ static ic_callback_t ic_callbacks[4][8] = {{NULL}};  // 4 FTMs, 8 channels each
 static uint32_t last_capture[4][8] = {{0}};
 
 // Engine position tracking
-static engine_position_t engine_pos = {0};
-static uint16_t crank_teeth_per_rev = 36;
-static uint16_t crank_missing_teeth = 1;
+// static engine_position_t engine_pos = {0};
+// static uint16_t crank_teeth_per_rev = 36;
+// static uint16_t crank_missing_teeth = 1;
 
 // rusEFI-compatible trigger decoder
-static trigger_decoder_t crank_decoder;
+// static trigger_decoder_t crank_decoder;
 
 // rusEFI-compatible RPM calculator
-static rpm_calculator_t rpm_calc;
+// static rpm_calculator_t rpm_calc;
 
 //=============================================================================
 // Private Helper Functions

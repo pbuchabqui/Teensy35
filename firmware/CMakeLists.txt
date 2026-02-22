@@ -60,30 +60,23 @@ set(CMAKE_CXX_COMPILER_WORKS 1)
 ###############################################################################
 
 # CPU-specific flags
-set(CPU_FLAGS "-mcpu=${CPU_TYPE} -mthumb -mfloat-abi=${FLOAT_ABI} -mfpu=${FPU_TYPE}")
+set(CPU_FLAGS "-mcpu=cortex-m4" "-mthumb" "-mfloat-abi=hard" "-mfpu=fpv4-sp-d16")
 
 # Common C/C++ flags
-set(COMMON_FLAGS
-    "${CPU_FLAGS}"
-    "-Wall"                     # Enable all warnings
-    "-Wextra"                   # Enable extra warnings
-    "-ffunction-sections"       # Place functions in separate sections
-    "-fdata-sections"           # Place data in separate sections
-    "-fno-common"               # Prevent common variables
-    "-fno-builtin"              # Don't use built-in functions
+list(APPEND CPU_FLAGS
+    "-Wall"
+    "-Wextra"
+    "-ffunction-sections"
+    "-fdata-sections"
+    "-fno-common"
+    "-fno-builtin"
 )
 
 # C-specific flags
-set(CMAKE_C_FLAGS "${COMMON_FLAGS} -std=gnu11")
+set(CMAKE_C_FLAGS "${CPU_FLAGS}" "-std=gnu11")
 
 # C++-specific flags
-set(CMAKE_CXX_FLAGS
-    "${COMMON_FLAGS}"
-    "-std=gnu++11"              # C++11 standard
-    "-fno-exceptions"           # Disable C++ exceptions (saves flash)
-    "-fno-rtti"                 # Disable run-time type info (saves flash)
-    "-fno-threadsafe-statics"   # Not needed in single-threaded environment
-)
+set(CMAKE_CXX_FLAGS "${CPU_FLAGS}" "-std=gnu++11" "-fno-exceptions" "-fno-rtti" "-fno-threadsafe-statics")
 
 # Optimization flags (change to -O0 -g for debugging)
 set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG")
@@ -96,15 +89,15 @@ set(LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/mk64fx512.ld")
 
 # Linker flags
 set(CMAKE_EXE_LINKER_FLAGS
-    "${CPU_FLAGS}"
-    "-T${LINKER_SCRIPT}"        # Linker script
-    "-Wl,--gc-sections"         # Remove unused sections
-    "-Wl,--print-memory-usage"  # Display memory usage
-    "-specs=nano.specs"         # Use newlib-nano (smaller C library)
-    "-specs=nosys.specs"        # No syscalls
-    "-lm"                       # Link math library
-    "-lc"                       # Link C library
-    "-lnosys"                   # No system calls
+    ${CPU_FLAGS}
+    -T${LINKER_SCRIPT}
+    -Wl,--gc-sections
+    -Wl,--print-memory-usage
+    -specs=nano.specs
+    -specs=nosys.specs
+    -lm
+    -lc
+    -lnosys
 )
 
 ###############################################################################
@@ -137,6 +130,7 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/src/hal
     ${CMAKE_SOURCE_DIR}/src/board
     ${CMAKE_SOURCE_DIR}/src/controllers
+    ${CMAKE_SOURCE_DIR}/src/fatfs
 
     # TODO: Add Teensy core library paths when integrating
     # /path/to/teensy/cores/teensy3
@@ -159,6 +153,7 @@ set(SOURCES
     src/hal/clock_k64.c
     src/hal/gpio_k64.c
     src/hal/uart_k64.c
+    src/hal/spi_k64.c
 
     # HAL drivers (Phase 2)
     src/hal/adc_k64.c
@@ -168,8 +163,16 @@ set(SOURCES
     src/hal/pit_k64.c
     src/hal/input_capture_k64.c
 
+    # FatFS R0.16 implementation
+    src/fatfs/fatfs_k64.c
+    src/fatfs/fatfs_wrapper.c
+    src/fatfs/ff.c
+    src/fatfs/ffsystem.c
+    src/fatfs/ffunicode.c
+
     # Engine control (Phase 4)
     src/controllers/engine_control.c
+    src/controllers/wideband_k64.c
 
     # Communication (Final enhancements)
     src/hal/can_k64.c
