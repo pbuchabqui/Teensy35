@@ -36,3 +36,7 @@ venv/
 
 # Logs
 *.log
+
+# External repos (kept out of main repo)
+Teensy35/
+rusefi_latest/
